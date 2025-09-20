@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jharkhand — Live GPS Tracker</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+e2kG8b6kG1y0k3n1m0sV5g6zv1q3pY4fF7g8h+3s=" crossorigin="" />
+  <style>
+    :root{--accent:#0b63a4}
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+    .page{display:flex;flex-direction:column;height:100%}
+    header{background:linear-gradient(90deg,#e6f3fb,white);padding:12px 16px;border-bottom:1px solid #e6eef6}
+    header h1{margin:0;font-size:1.1rem}
+    header p{margin:6px 0 0;color:#444;font-size:0.9rem}
+    #map{flex:1;min-height:300px}
+    .controls{display:flex;gap:8px;padding:10px;align-items:center}
+    button{background:var(--accent);color:white;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+    button.secondary{background:#666}
+    .info{margin-left:auto;color:#333;font-size:0.9rem}
+    .status{padding:8px 12px;color:#111}
+    .footer{padding:8px 12px;font-size:0.85rem;color:#555;background:#fbfcff;border-top:1px solid #eef3fb}
+    @media (max-width:520px){header h1{font-size:1rem}.controls{flex-direction:column;align-items:stretch}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Jharkhand — Live GPS Tracker</h1>
+      <p>Shows the user's live location on a map of Jharkhand. Marker moves as user moves. Works on mobile & desktop (HTTPS required).</p>
+    </header>
+
+    <div class="controls">
+      <button id="startBtn">Start tracking</button>
+      <button id="stopBtn" class="secondary" disabled>Stop tracking</button>
+      <button id="centerBtn" class="secondary" disabled>Center on me</button>
+      <div class="info" id="coords">Lat: — , Lon: —</div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="status" id="status">Status: idle</div>
+    <div class="footer">Notes: The page must be served over HTTPS or localhost for geolocation to work. To test locally: <code>python -m http.server 8000</code> or <code>npx serve</code>.</div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-VK1m0s3fXbT2zb7QK2z3YQ6k5fG9K2x3e9uXwqY2h6k=" crossorigin=""></script>
+
+  <script>
+    // === Configuration ===
+    // Jharkhand center (Ranchi) and approximate bounding box to keep the focus on the state.
+    const JH_CENTER = [23.6102, 85.2799];
+    const JH_BOUNDS = [[21.5, 82.5], [26.0, 88.0]]; // SW lat,lng and NE lat,lng (approx)
+
+    // === Map setup ===
+    const map = L.map('map', { zoomControl: true }).setView(JH_CENTER, 7);
+    // restrict panning roughly to Jharkhand area (optional)
+    map.setMaxBounds(JH_BOUNDS);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Marker + accuracy circle (initialized null)
+    let userMarker = null;
+    let accuracyCircle = null;
+
+    // Watch ID for navigator.geolocation
+    let watchId = null;
+
+    // UI elements
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const centerBtn = document.getElementById('centerBtn');
+    const coordsEl = document.getElementById('coords');
+    const statusEl = document.getElementById('status');
+
+    function updateStatus(msg){ statusEl.textContent = 'Status: ' + msg; }
+
+    function onLocationSuccess(pos){
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      const acc = pos.coords.accuracy; // meters
+
+      coordsEl.textContent = `Lat: ${lat.toFixed(6)} , Lon: ${lon.toFixed(6)} (±${Math.round(acc)} m)`;
+      updateStatus('Location received — accuracy ~' + Math.round(acc) + ' m');
+
+      // add or update marker
+      const latlng = [lat, lon];
+      if(!userMarker){
+        userMarker = L.marker(latlng).addTo(map).bindPopup('You are here');
+        accuracyCircle = L.circle(latlng, { radius: acc }).addTo(map);
+        userMarker.openPopup();
+      } else {
+        userMarker.setLatLng(latlng);
+        accuracyCircle.setLatLng(latlng);
+        accuracyCircle.setRadius(acc);
+      }
+    }
+
+    function onLocationError(err){
+      console.warn('Geolocation error', err);
+      switch(err.code){
+        case err.PERMISSION_DENIED: updateStatus('Permission denied. Allow location access.'); break;
+        case err.POSITION_UNAVAILABLE: updateStatus('Position unavailable.'); break;
+        case err.TIMEOUT: updateStatus('Location request timed out.'); break;
+        default: updateStatus('Unknown geolocation error.');
+      }
+    }
+
+    // Start watching position
+    function startTracking(){
+      if(!('geolocation' in navigator)){
+        updateStatus('Geolocation not supported by this browser.');
+        return;
+      }
+      // start watchPosition so marker updates as the user moves
+      watchId = navigator.geolocation.watchPosition(onLocationSuccess, onLocationError, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000
+      });
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      centerBtn.disabled = false;
+      updateStatus('Tracking started — waiting for first fix...');
+    }
+
+    // Stop watching
+    function stopTracking(){
+      if(watchId !== null){
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        updateStatus('Tracking stopped.');
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    // Center map on current marker
+    function centerOnUser(){
+      if(userMarker){
+        map.setView(userMarker.getLatLng(), Math.max(map.getZoom(), 15));
+      } else {
+        updateStatus('No location available yet — start tracking first.');
+      }
+    }
+
+    // Event listeners
+    startBtn.addEventListener('click', startTracking);
+    stopBtn.addEventListener('click', stopTracking);
+    centerBtn.addEventListener('click', centerOnUser);
+
+    // Optional: ask for one immediate location when page loads (but do NOT start watch automatically)
+    // If you want auto-start on page load, uncomment below and adjust UX accordingly.
+    // navigator.geolocation.getCurrentPosition(onLocationSuccess, onLocationError, { enableHighAccuracy: true });
+
+    // Cleanup when leaving page
+    window.addEventListener('beforeunload', ()=>{ if(watchId !== null) navigator.geolocation.clearWatch(watchId); });
+
+  </script>
+</body>
+</html>
